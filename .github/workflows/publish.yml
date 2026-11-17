@@ -1,0 +1,70 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-[a-z]+.[0-9]+'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    if: github.repository == 'rameel/ramstack.mqpacker.js'
+    name: 'Publish Package'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # npm publishes the version from package.json, while the release and the dist-tag follow the tag.
+      - name: Check version
+        run: test "$(jq -r .version package.json)" = "$GITHUB_REF_NAME"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: latest
+
+      # No dependency cache here: a poisoned cache must not get into a release build.
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build package
+        run: pnpm build
+
+      - name: Archive package (.zip)
+        run: zip -r ramstack.mqpacker-${{ github.ref_name }}.zip dist package.json README.md LICENSE
+
+      - name: Archive package (.tar.gz)
+        run: tar -czvf ramstack.mqpacker-${{ github.ref_name }}.tar.gz dist package.json README.md LICENSE
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            ramstack.mqpacker-${{ github.ref_name }}.zip
+            ramstack.mqpacker-${{ github.ref_name }}.tar.gz
+
+      # Publishing goes last: npm never accepts the same version again, so a failed
+      # run can be restarted only if nothing has been published yet.
+      # npm refuses to publish a prerelease version without an explicit dist-tag.
+      - name: Publish package
+        run: npm publish --access public ${{ contains(github.ref_name, '-') && '--tag next' || '' }}
