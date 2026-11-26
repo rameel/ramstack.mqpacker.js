@@ -1,6 +1,6 @@
 {
   "name": "@ramstack/mqpacker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "PostCSS plugin that packs identical media queries into one. Supports CSS nesting, cascade layers, @container and range syntax.",
   "type": "module",
   "author": "rameel <rameel-b@hotmail.com>",
@@ -33,6 +33,7 @@
     "media",
     "media-queries",
     "mqpacker",
+    "css-mqpacker",
     "pack",
     "merge",
     "optimization"
