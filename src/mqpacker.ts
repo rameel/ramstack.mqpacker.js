@@ -43,6 +43,36 @@ type Context = Root | AtRule;
 type Wrapper = Rule | AtRule;
 
 /**
+ * A media query and the information collected about it before packing.
+ */
+interface Candidate {
+    /**
+     * The media query.
+     */
+    media: AtRule;
+
+    /**
+     * The query list as written in the stylesheet, used in warnings.
+     */
+    query: string;
+
+    /**
+     * The normalized query list that identifies the group of the media query.
+     */
+    key: string;
+
+    /**
+     * The reason the media query must stay in place to preserve the order of cascade layers, if any.
+     */
+    reason: string | undefined;
+
+    /**
+     * The comments that describe the media query, moved along with its content.
+     */
+    comments: Comment[];
+}
+
+/**
  * Creates the plugin that packs identical media queries into one `@media` rule
  * placed at the end of the enclosing context.
  *
@@ -106,74 +136,51 @@ class Packer {
      * @param context - The context to pack.
      */
     pack(context: Context): void {
-        const candidates: AtRule[] = [];
-        visit(context, node => {
-            if (is_media(node)) {
-                candidates.push(node);
-            }
-        });
-
-        // Unlike the parser, PostCSS leaves the params of created at-rules undefined.
-        const queries = candidates.map(media => media.params ?? "");
-        const keys = queries.map(normalize_query);
-        const reasons = candidates.map(media => this.#layers?.why_move_is_blocked(media));
+        const candidates: Candidate[] = [];
 
         // Moving a media query brings the nodes before it next to the following one,
-        // so the comments are collected before any media query is moved.
-        const comments = candidates.map(get_leading_comments);
+        // so the candidates are collected, with their comments, before any media query is moved.
+        visit(context, media => {
+            if (!is_media(media)) {
+                return;
+            }
+
+            // Unlike the parser, PostCSS leaves the params of created at-rules undefined.
+            const query = media.params ?? "";
+            candidates.push({
+                media,
+                query,
+                key: normalize_query(query),
+                reason: this.#layers?.why_move_is_blocked(media),
+                comments: get_leading_comments(media)
+            });
+        });
 
         // A media query that stays in place also holds the preceding ones with the same
         // query list in place: moving them past it would change the order of their rules.
-        const barriers = new Map<string, number>();
-        reasons.forEach((reason, i) => {
+        const last_blocked_at = new Map<string, number>();
+        for (const [index, { key, reason }] of candidates.entries()) {
             if (reason) {
-                barriers.set(keys[i], i);
+                last_blocked_at.set(key, index);
             }
-        });
+        }
 
         const groups = new Map<string, AtRule>();
         const held = new Map<string, number>();
 
-        for (let i = 0; i < candidates.length; i++) {
-            const media = candidates[i];
-            const key = keys[i];
-            const reason = reasons[i];
+        for (const [index, candidate] of candidates.entries()) {
+            const key = candidate.key;
 
-            if (reason) {
-                const count = held.get(key) ?? 0;
+            if (candidate.reason) {
+                this.#leave_in_place(context, candidate, held.get(key) ?? 0);
                 held.delete(key);
-
-                // A media query nested in the one left in place for the same reason
-                // is not reported again: the warning for the outer one covers it.
-                if (this.#reasons.get(context) !== reason) {
-                    media.warn(this.#helpers.result, `@media ${queries[i]} was left in place because ${reason}.${describe_held(count)}`);
-                }
-
-                this.#reasons.set(media, reason);
-                continue;
             }
-
-            if (i < (barriers.get(key) ?? -1)) {
+            else if (index < (last_blocked_at.get(key) ?? -1)) {
                 held.set(key, (held.get(key) ?? 0) + 1);
-                continue;
             }
-
-            let group = groups.get(key);
-            if (!group) {
-                group = this.#create_at_rule(media);
-                groups.set(key, group);
-
-                // The group is placed at the nesting depth of the outermost wrapper
-                // of the media query, so it takes the closing whitespace of that node.
-                let top: Wrapper = media;
-                while (top.parent !== context) {
-                    top = top.parent as Wrapper;
-                }
-
-                group.raws.after = top.raws.after;
+            else {
+                this.#add_to_group(context, groups, candidate);
             }
-
-            this.#move_into_group(media, comments[i], context, group);
         }
 
         const list = [...groups.values()];
@@ -185,8 +192,47 @@ class Packer {
         }
 
         insert_packed_queries(context, list);
-
         visit(context, node => this.pack(node));
+    }
+
+    /**
+     * Records why the media query stays in place and reports it.
+     *
+     * @param context - The context the media query belongs to.
+     * @param candidate - The media query that cannot be moved.
+     * @param held - The number of preceding media queries it holds in place.
+     */
+    #leave_in_place(context: Context, { media, query, reason }: Candidate, held: number): void {
+        // A media query nested in the one left in place for the same reason
+        // is not reported again: the warning for the outer one covers it.
+        if (this.#reasons.get(context) !== reason) {
+            media.warn(this.#helpers.result, `@media ${query} was left in place because ${reason}.${describe_held(held)}`);
+        }
+
+        this.#reasons.set(media, reason!);
+    }
+
+    /**
+     * Moves the candidate into the group for its query list, creating the group on first use.
+     */
+    #add_to_group(context: Context, groups: Map<string, AtRule>, candidate: Candidate): void {
+        const { media, key, comments } = candidate;
+        let group = groups.get(key);
+        if (!group) {
+            group = this.#create_at_rule(media);
+
+            // The group is placed at the nesting depth of the outermost wrapper
+            // of the media query, so it takes the closing whitespace of that node.
+            let top: Wrapper = media;
+            while (top.parent !== context) {
+                top = top.parent as Wrapper;
+            }
+
+            group.raws.after = top.raws.after;
+            groups.set(key, group);
+        }
+
+        this.#move_into_group(media, comments, context, group);
     }
 
     /**
