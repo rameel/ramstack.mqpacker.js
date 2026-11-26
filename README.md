@@ -330,7 +330,7 @@ The values of the `sort` option are compatible, including custom compare functio
 
 * Media queries are sorted mobile-first by default. Pass `sort: false` to keep the order in which
   they first appear, as css-mqpacker does by default.
-* The plugin requires PostCSS 8 and is published as an ES module. `require()` works
+* The plugin requires PostCSS 8.4 or later and is published as an ES module. `require()` works
   in Node.js 22.12 or later.
 * The `mqpacker.pack()` helper and the CLI are not provided; use the PostCSS API or `postcss-cli`.
 * Media queries are moved out of nested style rules, `@container`, `@scope` and `@starting-style`,
