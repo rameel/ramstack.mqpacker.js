@@ -70,7 +70,7 @@ export class LayerTracker {
      * to preserve the order of cascade layers.
      *
      * @param media - The `@media` rule from the original stylesheet.
-     * @returns A reason suitable for a warning, or `undefined` if the media query can be moved.
+     * @returns A reason suitable for a warning, or `undefined` if the cascade layer order does not prevent the move.
      */
     why_move_is_blocked(media: AtRule): string | undefined {
         const position = this.#positions.get(media) ?? 0;
